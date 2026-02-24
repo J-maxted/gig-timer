@@ -14,7 +14,6 @@
   - Requires Node.js, npm, Git installed locally.
   - Expo/EAS builds run in the cloud; Android SDK/Xcode are NOT required on your machine.
   - iOS Ad Hoc requires an Apple Developer (Individual or Company/Org) account and device UDIDs.
-
 #>
 
 # =========================
@@ -24,8 +23,8 @@ $AppName             = "Gig Timer"
 $BundleIdentifier    = "com.yourname.gigtimer"  # iOS bundle id (change if you like)
 $AndroidPackage      = "com.yourname.gigtimer"  # Android package (change if you like)
 $AppVersion          = "1.0.0"
-$IosBuildNumber      = "1.0.0"
-$AndroidVersionCode  = 1
+$IosBuildNumber      = "1.0.0"                  # iOS buildNumber must be a STRING
+$AndroidVersionCode  = 1                        # Android versionCode must be an INT
 
 # Build profile to use from eas.json (we create a preview profile if missing)
 $EasProfile          = "preview"
@@ -39,6 +38,8 @@ $RegisterIosDevices  = $true
 # If true, offer to publish an OTA update to the same "preview" branch at the end
 $OfferEasUpdate      = $true
 
+# Optional: make console UTF‑8 so EAS spinners/lines look normal
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 # =========================
 # ====== FUNCTIONS ========
@@ -75,29 +76,39 @@ function Ensure-AppJson() {
 
   if (Test-Path "./app.json") {
     Write-Host "Ensuring fields in app.json..."
-    $json = Get-Content ./app.json -Raw | ConvertFrom-Json
 
-    if (-not $json.expo) { $json | Add-Member -Name "expo" -Value (@{}) -MemberType NoteProperty }
+    # Load JSON as hashtables (PowerShell 7+), so we can freely add keys
+    $json = Get-Content ./app.json -Raw | ConvertFrom-Json -AsHashtable
 
-    $json.expo.name            = $AppName
-    $json.expo.slug            = "gig-timer"
-    $json.expo.version         = $AppVersion
+    # Ensure required structure
+    if (-not $json.ContainsKey('expo')) { $json['expo'] = @{} }
 
-    if (-not $json.expo.runtimeVersion) { $json.expo.runtimeVersion = @{} }
-    $json.expo.runtimeVersion.policy = "sdkVersion"
+    # Basic app identity
+    $json['expo']['name']    = $AppName
+    $json['expo']['slug']    = 'gig-timer'
+    $json['expo']['version'] = $AppVersion
 
-    if (-not $json.expo.updates) { $json.expo.updates = @{} }
-    $json.expo.updates.fallbackToCacheTimeout = 0
+    # runtimeVersion policy (recommended for EAS OTA compatibility)
+    if (-not $json['expo'].ContainsKey('runtimeVersion')) { $json['expo']['runtimeVersion'] = @{} }
+    $json['expo']['runtimeVersion']['policy'] = 'sdkVersion'
 
-    if (-not $json.expo.ios) { $json.expo.ios = @{} }
-    $json.expo.ios.bundleIdentifier = $BundleIdentifier
-    $json.expo.ios.buildNumber      = $IosBuildNumber
+    # Updates (classic updates block)
+    if (-not $json['expo'].ContainsKey('updates')) { $json['expo']['updates'] = @{} }
+    $json['expo']['updates']['fallbackToCacheTimeout'] = 0
 
-    if (-not $json.expo.android) { $json.expo.android = @{} }
-    $json.expo.android.package     = $AndroidPackage
-    $json.expo.android.versionCode = $AndroidVersionCode
+    # iOS identifiers (buildNumber must be string)
+    if (-not $json['expo'].ContainsKey('ios')) { $json['expo']['ios'] = @{} }
+    if ($BundleIdentifier) { $json['expo']['ios']['bundleIdentifier'] = "$BundleIdentifier" }
+    if ($IosBuildNumber)   { $json['expo']['ios']['buildNumber']      = "$IosBuildNumber" }
 
-    $json | ConvertTo-Json -Depth 10 | Out-File -Encoding utf8 ./app.json
+    # Android identifiers (versionCode must be int)
+    if (-not $json['expo'].ContainsKey('android')) { $json['expo']['android'] = @{} }
+    if ($AndroidPackage)      { $json['expo']['android']['package']     = "$AndroidPackage" }
+    if ($AndroidVersionCode)  { $json['expo']['android']['versionCode'] = [int]$AndroidVersionCode }
+
+    # Save back
+    $json | ConvertTo-Json -Depth 100 | Set-Content -Encoding UTF8 ./app.json
+    Write-Host "Updated ./app.json"
   } else {
     Write-Host "Found app.config.* — please ensure identifiers are set there."
   }
@@ -107,27 +118,33 @@ function Ensure-EasJson() {
   if (-not (Test-Path "./eas.json")) {
     Write-Host "Creating minimal eas.json..."
     $eas = @{
-      cli = @{ version = ">= 12.5.0" }
+      cli   = @{ version = ">= 12.5.0" }
       build = @{
         $EasProfile = @{
           distribution = "internal"
-          android     = @{ buildType = "apk" }
+          android     = @{ buildType = "apk"; credentialsSource = "remote" }
           ios         = @{ simulator = $false }
         }
       }
-    } | ConvertTo-Json -Depth 10
-    $eas | Out-File -Encoding utf8 ./eas.json
+    }
+    $eas | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 ./eas.json
   } else {
     # Validate profile exists; if not, append it
-    $easObj = Get-Content ./eas.json -Raw | ConvertFrom-Json
-    if (-not $easObj.build.$EasProfile) {
+    $easObj = Get-Content ./eas.json -Raw | ConvertFrom-Json -AsHashtable
+    if (-not $easObj.ContainsKey('build')) { $easObj['build'] = @{} }
+    if (-not $easObj['build'].ContainsKey($EasProfile)) {
       Write-Host "Adding '$EasProfile' profile to eas.json..."
-      $easObj.build | Add-Member -Name $EasProfile -MemberType NoteProperty -Value @{
+      $easObj['build'][$EasProfile] = @{
         distribution = "internal"
-        android     = @{ buildType = "apk" }
+        android     = @{ buildType = "apk"; credentialsSource = "remote" }
         ios         = @{ simulator = $false }
       }
-      $easObj | ConvertTo-Json -Depth 10 | Out-File -Encoding utf8 ./eas.json
+      $easObj | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 ./eas.json
+    } else {
+      # Ensure credentialsSource remote to avoid local prompts
+      if (-not $easObj['build'][$EasProfile].ContainsKey('android')) { $easObj['build'][$EasProfile]['android'] = @{} }
+      $easObj['build'][$EasProfile]['android']['credentialsSource'] = 'remote'
+      $easObj | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 ./eas.json
     }
   }
 }
@@ -181,8 +198,9 @@ $androidLog = New-TemporaryFile
 eas build -p android --profile $EasProfile 2>&1 | Tee-Object -FilePath $androidLog
 if ($LASTEXITCODE -ne 0) { Exit-OnError "Android build failed. See log: $androidLog" }
 
-# Extract install page from output (basic pattern match)
-$AndroidUrl = Select-String -Path $androidLog -Pattern "https?://.*expo\.dev.*" -SimpleMatch | Select-Object -Last 1 | ForEach-Object { $_.Matches.Value }
+# Extract install page from output (regex match)
+$androidMatch = Select-String -Path $androidLog -Pattern 'https?://\S*expo\.dev\S*' -AllMatches | Select-Object -Last 1
+$AndroidUrl = if ($androidMatch) { $androidMatch.Matches[-1].Value } else { $null }
 if (-not $AndroidUrl) { Write-Host "Could not auto-detect Android install URL. Open the EAS build page to copy it." -ForegroundColor Yellow }
 
 # iOS DEVICE REGISTRATION (optional)
@@ -203,8 +221,9 @@ $iosLog = New-TemporaryFile
 eas build -p ios --profile $EasProfile 2>&1 | Tee-Object -FilePath $iosLog
 if ($LASTEXITCODE -ne 0) { Exit-OnError "iOS build failed. See log: $iosLog" }
 
-# Extract install page from output
-$IosUrl = Select-String -Path $iosLog -Pattern "https?://.*expo\.dev.*" -SimpleMatch | Select-Object -Last 1 | ForEach-Object { $_.Matches.Value }
+# Extract install page from output (regex match)
+$iosMatch = Select-String -Path $iosLog -Pattern 'https?://\S*expo\.dev\S*' -AllMatches | Select-Object -Last 1
+$IosUrl = if ($iosMatch) { $iosMatch.Matches[-1].Value } else { $null }
 if (-not $IosUrl) { Write-Host "Could not auto-detect iOS install URL. Open the EAS build page to copy it." -ForegroundColor Yellow }
 
 # SUMMARY

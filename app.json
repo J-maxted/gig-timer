@@ -18,14 +18,17 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourname.gigtimer",
+      "buildNumber": "1.0.0"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#FFFFFF"
       },
-      "package": "com.jmaxted.gigtimer"
+      "package": "com.yourname.gigtimer",
+      "versionCode": 1
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -34,6 +37,9 @@
       "eas": {
         "projectId": "8ed0c8dd-d48b-4799-861d-9b40624f0f27"
       }
+    },
+    "runtimeVersion": {
+      "policy": "sdkVersion"
     }
   }
 }
