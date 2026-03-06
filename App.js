@@ -25,6 +25,7 @@ import {
 import { Directory, File } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import * as Clipboard from "expo-clipboard";
+import * as Print from "expo-print";
 import { TabView, TabBar } from "react-native-tab-view";
 
 const GigTimer = () => {
@@ -197,7 +198,7 @@ const GigTimer = () => {
         results: res,
         tappedBoats: [...h.tappedBoats, i],
         lastTap: i,
-        lastTapTime: Date.now(), 
+        lastTapTime: Date.now(),
       },
     }));
   };
@@ -296,106 +297,123 @@ const GigTimer = () => {
     return s;
   }
 
+
   // =========================================================
-  // === START shareRes (hardened v2) ========================
+  // Unified Export Function (Copy / Share / Save)
   // =========================================================
-  const shareRes = async (k) => {
+  const exportResults = async (k, action) => {
     try {
-      // Diagnostics to confirm expo-sharing at runtime
-      console.log("Sharing module type:", typeof Sharing);
-      console.log(
-        "Sharing keys:",
-        Sharing ? Object.keys(Sharing) : "no module",
-      );
-      console.log("typeof shareAsync:", Sharing && typeof Sharing.shareAsync);
+      const heat = heatData[k];
+      const heatTitle = routes.find((r) => r.key === k)?.title ?? "";
 
-      if (Platform.OS === "web") {
-        const { csv, fileName } = buildCsvForHeat(k);
-        const blob = new Blob([csv], { type: "text/csv" });
-        const url = URL.createObjectURL(blob);
-
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = fileName;
-        a.click();
-
-        URL.revokeObjectURL(url);
-        return;
-      }
-      // Build CSV once (used for both file-based and text fallback)
+      // Build CSV
       const { csv, fileName } = buildCsvForHeat(k);
 
-      // Guard 1: module present + functions exposed
-      const hasModule =
-        Sharing &&
-        typeof Sharing.isAvailableAsync === "function" &&
-        typeof Sharing.shareAsync === "function";
+      // Build HTML for iOS PDF
+      const buildHtml = () => `
+      <h1>Race: ${heat.raceName}</h1>
+      <h2>Heat: ${heatTitle}</h2>
+      <table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%;">
+        <tr style="background-color: #eee;">
+          <th>Position</th><th>Name</th><th>Club</th><th>Time (s)</th>
+        </tr>
+        ${heat.results
+          .map(
+            (r, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${r.name}</td>
+            <td>${r.club || ""}</td>
+            <td>${r.time}</td>
+          </tr>
+        `,
+          )
+          .join("")}
+      </table>
+    `;
 
-      if (!hasModule) {
-        // Fallback: React Native text-only share (no file attachment)
-        await Share.share({ title: "Gig Timer results", message: csv });
+      if (action === "copy") {
+        await Clipboard.setStringAsync(csv);
+        Alert.alert("Copied!", "Results copied to clipboard.");
         return;
       }
 
-      // Guard 2: device has share targets for file-based share
-      const canShare = await Sharing.isAvailableAsync();
-      if (!canShare) {
-        // Fallback to text-only share
-        await Share.share({ title: "Gig Timer results", message: csv });
+      if (action === "share") {
+        // iOS → PDF
+        if (Platform.OS === "ios") {
+          const html = buildHtml();
+          const { uri } = await Print.printToFileAsync({ html });
+          await Sharing.shareAsync(uri, {
+            mimeType: "application/pdf",
+            dialogTitle: "Share Race Results",
+            UTI: "com.adobe.pdf",
+          });
+          return;
+        }
+
+        // Web → CSV download
+        if (Platform.OS === "web") {
+          const blob = new Blob([csv], { type: "text/csv" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = fileName;
+          a.click();
+          URL.revokeObjectURL(url);
+          return;
+        }
+
+        // Native Android → file-based share
+        const cacheDir = await Directory.cache();
+        const file = await cacheDir.createFile(fileName, "text/csv");
+        await file.write(csv);
+        await Sharing.shareAsync(String(file.uri), {
+          mimeType: "text/csv",
+          dialogTitle: "Share Race Results",
+          UTI: "public.comma-separated-values-text",
+        });
         return;
       }
 
-      // File-based share path (modern File API)
-      const cacheDir = await Directory.cache(); // Directory instance
-      const file = await cacheDir.createFile(fileName, "text/csv"); // File instance
-      await file.write(csv); // Write text content
-      const uri = String(file.uri);
+      if (action === "save") {
+        // iOS → save PDF
+        if (Platform.OS === "ios") {
+          const html = buildHtml();
+          const { uri } = await Print.printToFileAsync({ html });
+          Alert.alert("Saved!", `PDF saved at:\n${uri}`);
+          return;
+        }
 
-      await Sharing.shareAsync(uri, {
-        mimeType: "text/csv",
-        dialogTitle: "Share results",
-        UTI: "public.comma-separated-values-text",
-      });
+        // Web → CSV download
+        if (Platform.OS === "web") {
+          const blob = new Blob([csv], { type: "text/csv" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = fileName;
+          a.click();
+          URL.revokeObjectURL(url);
+          return;
+        }
+
+        // Native Android → pick folder & save CSV
+        const picked = await Directory.pickDirectoryAsync();
+        if (!picked) {
+          Alert.alert("Cancelled", "No folder selected.");
+          return;
+        }
+        const target = await picked.createFile(fileName, "text/csv");
+        await target.write(csv);
+        Alert.alert("Saved!", `CSV saved to selected folder.\n\n(${fileName})`);
+        return;
+      }
+
+      // Fallback: just copy CSV if action unknown
+      await Clipboard.setStringAsync(csv);
+      Alert.alert("Copied!", "Results copied to clipboard.");
     } catch (err) {
-      console.warn("shareRes error:", err);
-      // Last-chance fallback: text-only share
-      try {
-        const { csv } = buildCsvForHeat(k);
-        await Share.share({ title: "Gig Timer results", message: csv });
-      } catch (e) {
-        Alert.alert("Share failed", String(err?.message ?? err));
-      }
-    }
-  };
-  // =========================================================
-  // === END shareRes (hardened v2) ==========================
-  // =========================================================
-
-  // ----------------------------
-  // Save (new File API)
-  // ----------------------------
-  const saveRes = async (k) => {
-    try {
-      const { csv, fileName } = buildCsvForHeat(k);
-
-      // Let the user pick a folder (Android/iOS) and then create/write the file there
-      const picked = await Directory.pickDirectoryAsync();
-      if (!picked) {
-        Alert.alert("Save cancelled", "No folder selected.");
-        return;
-      }
-
-      // picked is a Directory instance; create file inside it
-      const target = await picked.createFile(fileName, "text/csv");
-      await target.write(csv);
-
-      Alert.alert(
-        "Saved",
-        `CSV saved to your selected folder.\n\n(${fileName})`,
-      );
-    } catch (e) {
-      console.warn("saveRes error:", e);
-      Alert.alert("Save failed", String(e?.message ?? e));
+      console.warn("exportResults error:", err);
+      Alert.alert("Export failed", String(err?.message ?? err));
     }
   };
 
@@ -546,27 +564,21 @@ const GigTimer = () => {
             <View style={styles.exportRow}>
               <TouchableOpacity
                 style={styles.thirdButton}
-                onPress={() => copyRes(route.key)}
+                onPress={() => exportResults(route.key, "copy")}
               >
                 <Text style={styles.btnText}>Copy</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.thirdButton}
-                onPress={() => shareRes(route.key)}
+                onPress={() => exportResults(route.key, "share")}
               >
                 <Text style={styles.btnText}>Share</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.thirdButton}
-                onPress={() => {
-                  if (Platform.OS === "web") {
-                    shareRes(route.key);
-                  } else {
-                    saveRes(route.key);
-                  }
-                }}
+                onPress={() => exportResults(route.key, "save")}
               >
                 <Text style={styles.btnText}>Save</Text>
               </TouchableOpacity>
