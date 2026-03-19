@@ -1,62 +1,61 @@
 {
   "expo": {
-    "name": "Gig Timer",
+    "name": "Boat Timer",
     "slug": "gig-timer",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+
+    "icon": "./assets/icon.png",
+
     "splash": {
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "updates": {
-      "fallbackToCacheTimeout": 0,
-      "enabled": false
-    },
+
     "assetBundlePatterns": [
       "**/*"
     ],
+
+    "android": {
+      "package": "com.yourname.gigtimer",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+
     "ios": {
-      "supportsTablet": true,
       "bundleIdentifier": "com.yourname.gigtimer",
+      "supportsTablet": true,
       "buildNumber": "1.0.0",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#FFFFFF"
-      },
-      "package": "com.yourname.gigtimer",
-      "versionCode": 1
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "8ed0c8dd-d48b-4799-861d-9b40624f0f27"
-      }
-    },
-    "runtimeVersion": {
-      "policy": "sdkVersion"
-    },
+
     "plugins": [
       [
         "expo-build-properties",
         {
           "android": {
-            "abiFilters": [
-              "arm64-v8a",
-              "armeabi-v7a"
-            ]
+            "abiFilters": ["arm64-v8a", "armeabi-v7a"]
           }
         }
-      ],
-      "expo-sharing"
-    ]
+      ]
+      /* Add file-system & splash-screen plugins here if needed later */
+    ],
+
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
+
+    "extra": {
+      "eas": {
+        "projectId": "8ed0c8dd-d48b-4799-861d-9b40624f0f27"
+      }
+    }
   }
 }
