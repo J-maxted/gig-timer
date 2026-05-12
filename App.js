@@ -1,8 +1,11 @@
-// Gig Timer - React Native (Expo) App
-// Modern File API (SDK 54+): Directory/File for Share & Save
-// - Share: cache -> createFile -> write -> Sharing.shareAsync (with runtime guards + RN Share fallback)
-// - Save: pickDirectory -> createFile -> write
-// UI tweaks retained: white BG, visible placeholders, small gap, bottom safe padding (~8mm)
+// Boat Timer - React Native (Expo) App
+// Updates included:
+// 1) App name updated in UI to "Boat Timer"
+// 2) Boats sorted alphabetically on Add Boat
+// 3) Times shown as mm:ss.s (0.1 s) everywhere (screen / copy / share / save)
+// 4) Position prefix in results display ("1. Boat")
+// 5) Share/Save use tab-separated values (TSV, not CSV)
+// 6) 4-second splash using expo-splash-screen + white background throughout
 
 import React, { useState, useRef, useEffect } from 'react';
 import {
@@ -18,14 +21,18 @@ import {
   Platform,
   StatusBar,
   StyleSheet,
-  Share, // used for fallback text-only sharing
+  Share, // fallback text sharing
 } from 'react-native';
 
-// Modern FileSystem API (no legacy)
-import { Directory, File } from 'expo-file-system';
+// Modern FileSystem API (SDK 54+)
+import { Directory } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as Clipboard from 'expo-clipboard';
 import { TabView, TabBar } from 'react-native-tab-view';
+
+// Splash control (keep splash for ~4s)
+import * as SplashScreen from 'expo-splash-screen';
+SplashScreen.preventAutoHideAsync().catch(() => { /* noop if already prevented */ });
 
 const GigTimer = () => {
   const initialLayout = { width: Dimensions.get('window').width };
@@ -39,15 +46,23 @@ const GigTimer = () => {
       boats: [],
       newBoatName: '',
       newBoatClub: '',
-      results: [],
+      results: [],         // [{ idx, name, club, timeSec }]
       tappedBoats: [],
       startTime: null,
-      timer: 0,
+      timer: 0,            // live timer (seconds)
       lastTap: null
     },
   });
 
   const timerRefs = useRef({});
+
+  // Splash hide after ~4s
+  useEffect(() => {
+    const t = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {});
+    }, 4000);
+    return () => clearTimeout(t);
+  }, []);
 
   // Keep other heats' raceName in sync with Heat 1
   useEffect(() => {
@@ -120,13 +135,17 @@ const GigTimer = () => {
     }));
   };
 
-  const handleTapBoat = i => {
+  const handleTapBoat = (i) => {
     const key = routes[index].key;
     const h = heatData[key];
     if (!h.startTime || h.tappedBoats.includes(i)) return;
-    const t = ((Date.now() - h.startTime) / 1000).toFixed(1);
-    const res = [...h.results, { idx: i, name: h.boats[i].name, club: h.boats[i].club, time: t }]
-      .sort((a, b) => a.time - b.time);
+
+    // Capture 0.1 s resolution in seconds (numeric)
+    const elapsedSec = Number(((Date.now() - h.startTime) / 1000).toFixed(1));
+
+    const entry = { idx: i, name: h.boats[i].name, club: h.boats[i].club, timeSec: elapsedSec };
+    const res = [...h.results, entry].sort((a, b) => a.timeSec - b.timeSec);
+
     setHeatData(prev => ({
       ...prev,
       [key]: { ...h, results: res, tappedBoats: [...h.tappedBoats, i], lastTap: i }
@@ -135,7 +154,7 @@ const GigTimer = () => {
 
   const handleUndo = () => {
     const key = routes[index].key;
-    const h = heatData[key]; 
+    const h = heatData[key];
     if (h.lastTap === null) return;
     const res = h.results.filter(r => r.idx !== h.lastTap);
     setHeatData(prev => ({
@@ -152,164 +171,123 @@ const GigTimer = () => {
   const handleAddBoat = () => {
     const key = routes[index].key;
     const h = heatData[key];
-    if (!h.newBoatName.trim()) return;
+    const name = (h.newBoatName || '').trim();
+    if (!name) return;
+    const club = (h.newBoatClub || '').trim();
+
+    // Append then sort alphabetically (case-insensitive)
+    const nextBoats = [...h.boats, { name, club }].sort((a, b) =>
+      a.name.localeCompare(b.name, 'en', { sensitivity: 'base' })
+    );
+
     setHeatData(prev => ({
       ...prev,
-      [key]: {
-        ...h,
-        boats: [...h.boats, { name: h.newBoatName, club: h.newBoatClub }],
-        newBoatName: '',
-        newBoatClub: ''
-      }
+      [key]: { ...h, boats: nextBoats, newBoatName: '', newBoatClub: '' }
     }));
   };
 
-  const handleAddHeat = () => {
-    const n = heats.length + 1; 
-    const key = `heat${n}`;
-    const newH = { key, title: `Heat ${n}` };
-    setHeats(h => [...h, newH]);
-    setRoutes(r => [...r, newH]);
-    setHeatData(d => ({
-      ...d,
-      [key]: {
-        raceName: heatData.heat1.raceName,
-        boats: [],
-        newBoatName: '',
-        newBoatClub: '',
-        results: [],
-        tappedBoats: [],
-        timer: 0,
-        startTime: null,
-        lastTap: null
-      }
-    }));
-  };
-
-  // ----------------------------
-  // Copy Results (unchanged)
-  // ----------------------------
-  const formatText = res => {
-    const key = routes[index].key; 
-    const h = heatData[key];
-    const head = `Race: ${h.raceName}\nHeat: ${routes[index].title}`;
-    const body = res.map(e => `${e.name} (${e.club || ''}) - ${e.time}s`).join('\n');
+  // ---------- Text copy (positions + mm:ss.s) ----------
+  const formatText = (res, routeKey) => {
+    const h = heatData[routeKey];
+    const heatTitle = routes[index]?.title ?? '';
+    const head = `Race: ${h.raceName}\nHeat: ${heatTitle}`;
+    const body = res
+      .map((e, i) => `${i + 1}. ${e.name}${e.club ? ` (${e.club})` : ''} - ${formatTime(e.timeSec)}`)
+      .join('\n');
     return head + '\n' + body;
   };
 
-  const copyRes = k => {
-    Clipboard.setStringAsync(formatText(heatData[k].results));
+  const copyRes = (k) => {
+    const text = formatText(heatData[k].results, k);
+    Clipboard.setStringAsync(text);
     Alert.alert('Results copied');
   };
 
-  // ----------------------------
-  // CSV helpers (shared by Share/Save)
-  // ----------------------------
-  const buildCsvForHeat = (k) => {
-    const header = 'Race,Heat,Name,Club,Time';
+  // ---------- TSV helpers (tab-separated) ----------
+  const buildTsvForHeat = (k) => {
+    const header = 'Race\tHeat\tPos\tName\tClub\tTime';
     const heat = heatData[k];
     const heatTitle = routes[index]?.title ?? '';
-    const rows = heat.results.map(e =>
-      `${csvQuote(heat.raceName)},${csvQuote(heatTitle)},${csvQuote(e.name)},${csvQuote(e.club || '')},${e.time}`
+    const rows = heat.results.map((e, i) =>
+      `${tsvQuote(heat.raceName)}\t${tsvQuote(heatTitle)}\t${i + 1}\t${tsvQuote(e.name)}\t${tsvQuote(e.club || '')}\t${formatTime(e.timeSec)}`
     );
-    const csv = [header, ...rows].join('\n');
-    const fileName = `${k}-results-${Date.now()}.csv`;
-    return { csv, fileName };
+    const tsv = [header, ...rows].join('\n');
+    const fileName = `${k}-results-${Date.now()}.csv`; // extension .csv for compatibility, content is TSV
+    return { tsv, fileName };
   };
 
-  function csvQuote(val) {
+  function tsvQuote(val) {
     const s = String(val ?? '');
-    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    // For TSV, only quote if tabs/quotes/newlines appear
+    if (/[\t"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
     return s;
   }
 
-  // =========================================================
-  // === START shareRes (hardened v2) ========================
-  // =========================================================
+  // ---------- Share (file-based if available; fallback to text-only) ----------
   const shareRes = async (k) => {
     try {
-      // Diagnostics to confirm expo-sharing at runtime
       console.log('Sharing module type:', typeof Sharing);
       console.log('Sharing keys:', Sharing ? Object.keys(Sharing) : 'no module');
       console.log('typeof shareAsync:', Sharing && typeof Sharing.shareAsync);
 
-      // Build CSV once (used for both file-based and text fallback)
-      const { csv, fileName } = buildCsvForHeat(k);
+      const { tsv, fileName } = buildTsvForHeat(k);
 
-      // Guard 1: module present + functions exposed
       const hasModule =
         Sharing &&
         typeof Sharing.isAvailableAsync === 'function' &&
         typeof Sharing.shareAsync === 'function';
 
       if (!hasModule) {
-        // Fallback: React Native text-only share (no file attachment)
-        await Share.share({ title: 'Gig Timer results', message: csv });
+        await Share.share({ title: 'Boat Timer results', message: tsv });
         return;
       }
 
-      // Guard 2: device has share targets for file-based share
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
-        // Fallback to text-only share
-        await Share.share({ title: 'Gig Timer results', message: csv });
+        await Share.share({ title: 'Boat Timer results', message: tsv });
         return;
       }
 
-      // File-based share path (modern File API)
-      const cacheDir = await Directory.cache();                       // Directory instance
-      const file = await cacheDir.createFile(fileName, 'text/csv');   // File instance
-      await file.write(csv);                                          // Write text content
-      const uri = String(file.uri);
+      const cacheDir = await Directory.cache();
+      const file = await cacheDir.createFile(fileName, 'text/tab-separated-values');
+      await file.write(tsv);
 
+      const uri = String(file.uri);
       await Sharing.shareAsync(uri, {
-        mimeType: 'text/csv',
+        mimeType: 'text/tab-separated-values',
         dialogTitle: 'Share results',
-        UTI: 'public.comma-separated-values-text',
+        UTI: 'public.tab-separated-values-text',
       });
     } catch (err) {
       console.warn('shareRes error:', err);
-      // Last-chance fallback: text-only share
       try {
-        const { csv } = buildCsvForHeat(k);
-        await Share.share({ title: 'Gig Timer results', message: csv });
+        const { tsv } = buildTsvForHeat(k);
+        await Share.share({ title: 'Boat Timer results', message: tsv });
       } catch (e) {
         Alert.alert('Share failed', String(err?.message ?? err));
       }
     }
   };
-  // =========================================================
-  // === END shareRes (hardened v2) ==========================
-  // =========================================================
 
-  // ----------------------------
-  // Save (new File API)
-  // ----------------------------
+  // ---------- Save (pick folder → write TSV) ----------
   const saveRes = async (k) => {
     try {
-      const { csv, fileName } = buildCsvForHeat(k);
-
-      // Let the user pick a folder (Android/iOS) and then create/write the file there
+      const { tsv, fileName } = buildTsvForHeat(k);
       const picked = await Directory.pickDirectoryAsync();
       if (!picked) {
         Alert.alert('Save cancelled', 'No folder selected.');
         return;
       }
-
-      // picked is a Directory instance; create file inside it
-      const target = await picked.createFile(fileName, 'text/csv');
-      await target.write(csv);
-
-      Alert.alert('Saved', `CSV saved to your selected folder.\n\n(${fileName})`);
+      const target = await picked.createFile(fileName, 'text/tab-separated-values');
+      await target.write(tsv);
+      Alert.alert('Saved', `Results saved:\n${fileName}`);
     } catch (e) {
       console.warn('saveRes error:', e);
       Alert.alert('Save failed', String(e?.message ?? e));
     }
   };
 
-  // ----------------------------
-  // Per-heat screen
-  // ----------------------------
+  // ---------- Per-heat screen ----------
   const renderScene = ({ route }) => {
     const d = heatData[route.key];
 
@@ -325,6 +303,8 @@ const GigTimer = () => {
             contentContainerStyle={styles.container}
             keyboardShouldPersistTaps="handled"
           >
+            <Text style={styles.appTitle}>Boat Timer</Text>
+
             <TextInput
               style={styles.input}
               placeholder="Race Name"
@@ -356,7 +336,7 @@ const GigTimer = () => {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.timer}>{d.timer.toFixed(1)}s</Text>
+            <Text style={styles.timer}>{formatTime(d.timer)}</Text>
 
             <View style={styles.rowBig}>
               <TouchableOpacity style={[styles.halfButtonBig, { marginRight: 5 }]} onPress={handleStart}>
@@ -380,12 +360,12 @@ const GigTimer = () => {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.noteText}>Tap boat buttons below as boats cross finish line</Text>
+            <Text style={styles.noteText}>Tap boat buttons below as boats cross the finish</Text>
 
             <View style={styles.boatContainer}>
               {d.boats.map((b, i) => (
                 <TouchableOpacity
-                  key={i}
+                  key={`${b.name}-${i}`}
                   style={[styles.boatButton, d.tappedBoats.includes(i) ? styles.boatTapped : null]}
                   onPress={() => handleTapBoat(i)}
                 >
@@ -398,7 +378,7 @@ const GigTimer = () => {
 
             <Text style={styles.sub}>Results</Text>
 
-            {/* Three buttons in one row: Copy | Share | Save */}
+            {/* Copy | Share | Save (TSV) */}
             <View style={styles.exportRow}>
               <TouchableOpacity style={styles.thirdButton} onPress={() => copyRes(route.key)}>
                 <Text style={styles.btnText}>Copy</Text>
@@ -414,7 +394,9 @@ const GigTimer = () => {
             </View>
 
             {d.results.map((r, i) => (
-              <Text key={i}>{i + 1}. {r.name} ({r.club}) - {r.time}s</Text>
+              <Text key={`${r.idx}-${i}`}>
+                {i + 1}. {r.name}{r.club ? ` (${r.club})` : ''} - {formatTime(r.timeSec)}
+              </Text>
             ))}
           </ScrollView>
         </SafeAreaView>
@@ -424,10 +406,9 @@ const GigTimer = () => {
 
   return (
     <SafeAreaView style={styles.appSafeArea}>
-      {/* Dark icons on a light background */}
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent={false} />
 
-      {/* + Add Heat */}
+      {/* + Add Heat with tiny gap above tabs */}
       <TouchableOpacity
         style={[styles.addHeat, styles.addHeatSpacing, { marginTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 5 : 5 }]}
         onPress={handleAddHeat}
@@ -435,7 +416,6 @@ const GigTimer = () => {
         <Text style={styles.addHeatText}>+ Add Heat</Text>
       </TouchableOpacity>
 
-      {/* Tabs (Heat 1, Heat 2, ...) */}
       <TabView
         navigationState={{ index, routes }}
         renderScene={renderScene}
@@ -454,40 +434,44 @@ const GigTimer = () => {
   );
 };
 
+// ---------- helpers ----------
+function formatTime(sec) {
+  // inputs: seconds (number)
+  const total = Number(sec) || 0;
+  const m = Math.floor(total / 60);
+  const s = (total - m * 60);
+  const sFixed = (Math.round(s * 10) / 10).toFixed(1);
+  const mm = String(m).padStart(2, '0');
+  const ss = Number(sFixed) < 10 ? `0${sFixed}` : sFixed; // ensures 02:03.4
+  return `${mm}:${ss}`;
+}
+
 const styles = StyleSheet.create({
-  // Force white at the very top/root
   appSafeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
-
-  // Screen-level safe area: keep your border + force white
   safeArea: {
     flex: 1,
     borderBottomWidth: 8,
     borderColor: '#ccc',
     backgroundColor: '#FFFFFF',
   },
-
-  // Ensure the ScrollView itself paints white
   scroll: {
     backgroundColor: '#FFFFFF',
   },
-
-  // Content padding (force white + bottom safe space ≈ 8mm)
   container: {
     padding: 16,
     backgroundColor: '#FFFFFF',
-    paddingBottom: 56,
+    paddingBottom: 56, // ~8mm above nav bar
   },
 
-  title: {
-    position: 'absolute',
-    top: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
+  appTitle: {
+    color: '#111',
+    fontSize: 22,
+    fontWeight: '700',
+    marginBottom: 12,
     alignSelf: 'center',
-    color: 'white',
-    fontSize: 18,
-    fontWeight: 'bold',
   },
 
   input: {
@@ -504,10 +488,8 @@ const styles = StyleSheet.create({
   rowBoat: { flexDirection: 'row', marginBottom: 10 },
   button: { backgroundColor: '#4CAF50', padding: 10, borderRadius: 5, alignItems: 'center', marginVertical: 5 },
 
-  // + Add Heat button styles + small gap under it
   addHeat: { backgroundColor: '#6200ee', padding: 10, alignItems: 'center' },
   addHeatSpacing: { marginBottom: 5 },
-
   addHeatText: { color: 'white', fontWeight: 'bold' },
 
   halfButtonBig: { flex: 1, padding: 15, borderRadius: 5, backgroundColor: '#4CAF50' },
@@ -522,7 +504,6 @@ const styles = StyleSheet.create({
   boatTapped: { backgroundColor: '#585858' },
   boatText: { color: 'white', fontSize: 16 },
 
-  // Three slimmer buttons in one row
   exportRow: { flexDirection: 'row', marginVertical: 10, alignItems: 'stretch' },
   thirdButton: {
     flex: 1,
