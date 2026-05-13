@@ -19,13 +19,16 @@ import { Directory } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as Clipboard from 'expo-clipboard';
 import { TabView } from 'react-native-tab-view';
+import * as SplashScreen from 'expo-splash-screen';
+
+const MAX_HEATS = 5;
 
 const GigTimer = () => {
   const initialLayout = { width: Dimensions.get('window').width };
 
   const [heats, setHeats] = useState([{ key: 'heat1', title: 'Heat 1' }]);
   const [index, setIndex] = useState(0);
-  const [routes, setRoutes] = useState(heats);
+  const [routes, setRoutes] = useState([{ key: 'heat1', title: 'Heat 1' }]);
 
   const [heatData, setHeatData] = useState({
     heat1: {
@@ -42,6 +45,9 @@ const GigTimer = () => {
   });
 
   const timerRefs = useRef({});
+
+  const canAddHeat = heats.length < MAX_HEATS;
+  const currentKey = routes[index]?.key ?? 'heat1';
 
   // Keep other heats' raceName in sync with Heat 1
   useEffect(() => {
@@ -69,26 +75,49 @@ const GigTimer = () => {
     });
   }, [heatData.heat1?.raceName, routes]);
 
-  const currentKey = routes[index]?.key ?? 'heat1';
+  // Splash: keep for ~4 seconds
+  useEffect(() => {
+    (async () => {
+      try {
+        await SplashScreen.preventAutoHideAsync();
+      } catch {}
+      const t = setTimeout(() => {
+        SplashScreen.hideAsync().catch(() => {});
+      }, 4000);
+      return () => clearTimeout(t);
+    })();
+  }, []);
 
   const handleStart = () => {
     const key = currentKey;
-    if (!heatData[key]?.startTime) {
-      const s = Date.now();
-      timerRefs.current[key] = setInterval(() => {
-        setHeatData(prev => ({
-          ...prev,
-          [key]: { ...prev[key], timer: (Date.now() - s) / 1000 },
-        }));
-      }, 100);
-      setHeatData(prev => ({ ...prev, [key]: { ...prev[key], startTime: s } }));
-    }
+    const h = heatData[key];
+    if (!h || h.startTime) return;
+
+    const startMs = Date.now();
+
+    timerRefs.current[key] = setInterval(() => {
+      setHeatData(prev => ({
+        ...prev,
+        [key]: {
+          ...prev[key],
+          timer: (Date.now() - startMs) / 1000,
+        }
+      }));
+    }, 100);
+
+    setHeatData(prev => ({
+      ...prev,
+      [key]: { ...prev[key], startTime: startMs }
+    }));
   };
 
   const handleStop = () => {
     const key = currentKey;
     clearInterval(timerRefs.current[key]);
-    setHeatData(prev => ({ ...prev, [key]: { ...prev[key], startTime: null } }));
+    setHeatData(prev => ({
+      ...prev,
+      [key]: { ...prev[key], startTime: null }
+    }));
   };
 
   const handleReset = () => {
@@ -103,7 +132,7 @@ const GigTimer = () => {
         timer: 0,
         startTime: null,
         lastTap: null,
-      },
+      }
     }));
   };
 
@@ -123,46 +152,61 @@ const GigTimer = () => {
         timer: 0,
         startTime: null,
         lastTap: null,
-      },
+      }
     }));
   };
 
   const handleTapBoat = (i) => {
     const key = currentKey;
     const h = heatData[key];
-    if (!h.startTime || h.tappedBoats.includes(i)) return;
+    if (!h?.startTime) return;
+    if (h.tappedBoats.includes(i)) return;
 
     const elapsedSec = Number(((Date.now() - h.startTime) / 1000).toFixed(1));
-    const entry = { idx: i, name: h.boats[i].name, club: h.boats[i].club, timeSec: elapsedSec };
+
+    const entry = {
+      idx: i,
+      name: h.boats[i].name,
+      club: h.boats[i].club,
+      timeSec: elapsedSec
+    };
 
     const res = [...h.results, entry].sort((a, b) => a.timeSec - b.timeSec);
 
     setHeatData(prev => ({
       ...prev,
-      [key]: { ...h, results: res, tappedBoats: [...h.tappedBoats, i], lastTap: i },
+      [key]: {
+        ...h,
+        results: res,
+        tappedBoats: [...h.tappedBoats, i],
+        lastTap: i,
+      }
     }));
   };
 
   const handleUndo = () => {
     const key = currentKey;
     const h = heatData[key];
-    if (h.lastTap === null) return;
+    if (!h || h.lastTap === null) return;
 
     const res = h.results.filter(r => r.idx !== h.lastTap);
+    const tapped = h.tappedBoats.filter(x => x !== h.lastTap);
+
     setHeatData(prev => ({
       ...prev,
       [key]: {
         ...h,
         results: res,
-        tappedBoats: h.tappedBoats.filter(i => i !== h.lastTap),
+        tappedBoats: tapped,
         lastTap: null,
-      },
+      }
     }));
   };
 
   const handleAddBoat = () => {
     const key = currentKey;
     const h = heatData[key];
+    if (!h) return;
 
     const name = (h.newBoatName || '').trim();
     if (!name) return;
@@ -174,11 +218,18 @@ const GigTimer = () => {
 
     setHeatData(prev => ({
       ...prev,
-      [key]: { ...h, boats: nextBoats, newBoatName: '', newBoatClub: '' },
+      [key]: {
+        ...h,
+        boats: nextBoats,
+        newBoatName: '',
+        newBoatClub: '',
+      }
     }));
   };
 
   const handleAddHeat = () => {
+    if (!canAddHeat) return;
+
     const n = heats.length + 1;
     const key = `heat${n}`;
     const newH = { key, title: `Heat ${n}` };
@@ -186,10 +237,10 @@ const GigTimer = () => {
     setHeats(h => [...h, newH]);
     setRoutes(r => [...r, newH]);
 
-    setHeatData(d => ({
-      ...d,
+    setHeatData(prev => ({
+      ...prev,
       [key]: {
-        raceName: d.heat1?.raceName || '',
+        raceName: prev.heat1?.raceName || '',
         boats: [],
         newBoatName: '',
         newBoatClub: '',
@@ -198,42 +249,31 @@ const GigTimer = () => {
         timer: 0,
         startTime: null,
         lastTap: null,
-      },
+      }
     }));
   };
 
-  // NEW: Reset Heats (keep Heat 1 only)
+  // Reset heats: keep Heat 1 data
   const handleResetHeats = () => {
-    // stop all timers
     Object.values(timerRefs.current).forEach(t => t && clearInterval(t));
-
     setHeats([{ key: 'heat1', title: 'Heat 1' }]);
     setRoutes([{ key: 'heat1', title: 'Heat 1' }]);
     setIndex(0);
-
-    // keep heat1 data as-is; remove others
     setHeatData(prev => ({ heat1: prev.heat1 }));
   };
 
-  // Copy results: include positions + mm:ss.s
-  const formatText = (res, k) => {
-    const h = heatData[k];
-    const heatTitle = routes[index]?.title ?? '';
-    const head = `Race: ${h.raceName}\nHeat: ${heatTitle}`;
-    const body = res
-      .map((e, i) =>
-        `${i + 1}. ${e.name}${e.club ? ` (${e.club})` : ''} - ${formatTime(e.timeSec)}`
-      )
-      .join('\n');
-    return head + '\n' + body;
-  };
-
+  // ---------- Copy / TSV / Share / Save ----------
   const copyRes = (k) => {
-    Clipboard.setStringAsync(formatText(heatData[k].results, k));
+    const h = heatData[k];
+    const heatTitle = routes.find(r => r.key === k)?.title ?? '';
+    const head = `Race: ${h.raceName}\nHeat: ${heatTitle}`;
+    const body = h.results
+      .map((e, i) => `${i + 1}. ${e.name}${e.club ? ` (${e.club})` : ''} - ${formatTime(e.timeSec)}`)
+      .join('\n');
+    Clipboard.setStringAsync(head + '\n' + body);
     Alert.alert('Results copied');
   };
 
-  // TSV export (tab-separated) + NEW filename includes race + heat
   const buildTsvForHeat = (k) => {
     const heat = heatData[k];
     const heatTitle = routes.find(r => r.key === k)?.title ?? '';
@@ -243,14 +283,13 @@ const GigTimer = () => {
     const rows = heat.results.map((e, i) =>
       `${tsvQuote(race)}\t${tsvQuote(heatTitle)}\t${i + 1}\t${tsvQuote(e.name)}\t${tsvQuote(e.club || '')}\t${formatTime(e.timeSec)}`
     );
-
     const tsv = [header, ...rows].join('\n');
 
     const safeRace = safeFilePart(race);
     const safeHeat = safeFilePart(heatTitle);
     const stamp = timeStampForFile();
-
     const fileName = `results_${safeRace}_${safeHeat}_${stamp}.tsv`;
+
     return { tsv, fileName };
   };
 
@@ -263,7 +302,7 @@ const GigTimer = () => {
   function safeFilePart(s) {
     const base = String(s || '').trim() || 'Unknown';
     return base
-      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '') // illegal filename chars
+      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '')
       .replace(/\s+/g, '_')
       .slice(0, 24);
   }
@@ -274,7 +313,6 @@ const GigTimer = () => {
     return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   }
 
-  // Share (file if available; fallback to text)
   const shareRes = async (k) => {
     try {
       const { tsv, fileName } = buildTsvForHeat(k);
@@ -315,7 +353,6 @@ const GigTimer = () => {
     }
   };
 
-  // Save (pick folder -> write TSV)
   const saveRes = async (k) => {
     try {
       const { tsv, fileName } = buildTsvForHeat(k);
@@ -333,16 +370,16 @@ const GigTimer = () => {
     }
   };
 
-  // --- Custom Tab Bar (thin white border, thick on selected) + Add/Reset buttons below ---
+  // ---------- Custom Tab Bar (white background, tabs fit 5, borders, controls below tabs) ----------
   const renderTabBar = (props) => {
     const { navigationState, jumpTo } = props;
+
     return (
       <View style={styles.tabBarContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabRow}
-        >
+        {/* Spacer so tabs don’t overlap the clock / status bar */}
+        <View style={styles.statusSpacer} />
+
+        <View style={styles.tabRow}>
           {navigationState.routes.map((r, i) => {
             const focused = i === navigationState.index;
             return (
@@ -350,20 +387,32 @@ const GigTimer = () => {
                 key={r.key}
                 onPress={() => jumpTo(r.key)}
                 style={[styles.tabPill, focused ? styles.tabPillActive : styles.tabPillInactive]}
+                activeOpacity={0.85}
               >
-                <Text style={styles.tabLabel}>{r.title}</Text>
+                <Text style={styles.tabLabel} numberOfLines={1}>
+                  {r.title}
+                </Text>
               </TouchableOpacity>
             );
           })}
-        </ScrollView>
+        </View>
 
-        {/* Add Heat + Reset Heats row (below tabs) */}
+        {/* Buttons BELOW the tabs */}
         <View style={styles.heatControlsRow}>
-          <TouchableOpacity style={[styles.heatControlBtn, styles.heatControlLeft]} onPress={handleAddHeat}>
+          <TouchableOpacity
+            style={[styles.heatControlBtn, !canAddHeat && styles.heatControlDisabled]}
+            onPress={handleAddHeat}
+            disabled={!canAddHeat}
+            activeOpacity={0.85}
+          >
             <Text style={styles.btnText}>+ Add Heat</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.heatControlBtn, styles.heatControlRight]} onPress={handleResetHeats}>
+          <TouchableOpacity
+            style={styles.heatControlBtn}
+            onPress={handleResetHeats}
+            activeOpacity={0.85}
+          >
             <Text style={styles.btnText}>Reset Heats</Text>
           </TouchableOpacity>
         </View>
@@ -380,16 +429,12 @@ const GigTimer = () => {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : StatusBar.currentHeight || 0}
       >
-        <SafeAreaView style={[styles.safeArea, { paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 }]}>
-          <ScrollView
-            style={styles.scroll}
-            contentContainerStyle={styles.container}
-            keyboardShouldPersistTaps="handled"
-          >
-            {/* 3) Race label above the Race Name row */}
+        <SafeAreaView style={styles.safeArea}>
+          <ScrollView style={styles.scroll} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+            {/* Race label */}
             <Text style={styles.sub}>Race</Text>
 
-            {/* 6) Race Name row with New Race button on right (¼ width) */}
+            {/* Race name + New Race row */}
             <View style={styles.raceRow}>
               <TextInput
                 style={[styles.input, styles.raceInput]}
@@ -413,7 +458,7 @@ const GigTimer = () => {
               onChangeText={t => setHeatData(p => ({ ...p, [route.key]: { ...d, newBoatName: t } }))}
             />
 
-            {/* 5) Align Add Boat button to Club input (fixed by removing vertical margin + centering row) */}
+            {/* Club + Add Boat aligned */}
             <View style={styles.rowBoat}>
               <TextInput
                 style={[styles.input, styles.clubInput]}
@@ -427,7 +472,7 @@ const GigTimer = () => {
               </TouchableOpacity>
             </View>
 
-            {/* 4) Bigger timer */}
+            {/* Slightly bigger timer */}
             <Text style={styles.timer}>{formatTime(d.timer)}</Text>
 
             <View style={styles.rowBig}>
@@ -439,7 +484,7 @@ const GigTimer = () => {
               </TouchableOpacity>
             </View>
 
-            {/* 7) Undo + Reset in one row, each half width */}
+            {/* Undo + Reset row (slightly shorter) */}
             <View style={styles.rowUndoReset}>
               <TouchableOpacity style={[styles.halfActionBtn, { backgroundColor: '#fb8c00', marginRight: 6 }]} onPress={handleUndo}>
                 <Text style={styles.btnText}>Undo Last Tap</Text>
@@ -494,19 +539,18 @@ const GigTimer = () => {
   return (
     <SafeAreaView style={styles.appSafeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" translucent={false} />
-
       <TabView
         navigationState={{ index, routes }}
         renderScene={renderScene}
         onIndexChange={setIndex}
         initialLayout={initialLayout}
-        renderTabBar={renderTabBar}   {/* (1)(2) custom tabs + buttons below */}
+        renderTabBar={renderTabBar}
       />
     </SafeAreaView>
   );
 };
 
-// mm:ss.s formatting (0.1s)
+// mm:ss.s
 function formatTime(sec) {
   const total = Number(sec) || 0;
   const m = Math.floor(total / 60);
@@ -523,50 +567,71 @@ const styles = StyleSheet.create({
   scroll: { backgroundColor: '#FFFFFF' },
   container: { padding: 16, backgroundColor: '#FFFFFF', paddingBottom: 56 },
 
-  // --- Tab header + controls ---
+  // Top spacer so tabs don't overlap status bar
+  statusSpacer: {
+    height: Platform.OS === 'android'
+      ? (StatusBar.currentHeight || 0) + 12
+      : 12,
+  },
+
+  // Tabs + buttons container (white background)
   tabBarContainer: {
-    backgroundColor: '#6200ee',
-    paddingTop: 6,
-    paddingBottom: 10,
-  },
-  tabRow: {
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 10,
-    alignItems: 'center',
-    gap: 8,
+    paddingBottom: 12,
   },
+
+  // 5 tabs in one row
+  tabRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+
   tabPill: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
+    flex: 1,
+    paddingVertical: 9,
+    paddingHorizontal: 4,
     borderRadius: 8,
-    backgroundColor: '#6200ee',
+    backgroundColor: '#6200ee', // keep same fill
+    alignItems: 'center',
   },
+
   tabPillInactive: {
     borderWidth: 1,
     borderColor: '#FFFFFF',
   },
+
   tabPillActive: {
     borderWidth: 3,
     borderColor: '#FFFFFF',
   },
-  tabLabel: { fontSize: 16, color: '#FFFFFF', fontWeight: '700' },
+
+  tabLabel: {
+    fontSize: 14,
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
 
   heatControlsRow: {
     flexDirection: 'row',
-    paddingHorizontal: 10,
     marginTop: 10,
+    gap: 12,
   },
+
   heatControlBtn: {
     flex: 1,
     paddingVertical: 10,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#6200ee',
   },
-  heatControlLeft: { marginRight: 6 },
-  heatControlRight: { marginLeft: 6, backgroundColor: '#fb8c00' },
 
-  // --- Inputs / labels ---
+  heatControlDisabled: {
+    backgroundColor: '#BDBDBD',
+  },
+
   sub: { fontSize: 18, fontWeight: 'bold', marginVertical: 10, color: '#111' },
 
   input: {
@@ -580,9 +645,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
-  // 6) Race row (input + button)
   raceRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   raceInput: { flex: 3, marginBottom: 0, marginRight: 10 },
+
   newRaceBtn: {
     flex: 1,
     backgroundColor: '#fbc02d',
@@ -592,29 +657,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // 5) Club + Add Boat aligned
   rowBoat: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   clubInput: { flex: 1, marginBottom: 0, marginRight: 10 },
+
+  // Add Boat: dark blue (darker than boat buttons)
   addBoatBtnInline: {
     width: 130,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#1565C0',
     paddingVertical: 10,
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  // 4) Bigger timer
-  timer: { fontSize: 28, textAlign: 'center', marginVertical: 12, fontWeight: '700', color: '#111' },
+  // Timer slightly bigger
+  timer: { fontSize: 30, textAlign: 'center', marginVertical: 12, fontWeight: '700', color: '#111' },
 
   rowBig: { flexDirection: 'row', marginVertical: 10 },
   halfButtonBig: { flex: 1, padding: 15, borderRadius: 5, backgroundColor: '#4CAF50', alignItems: 'center' },
 
-  // 7) Undo + Reset row
+  // Undo/Reset slightly shorter (~1mm less)
   rowUndoReset: { flexDirection: 'row', marginTop: 6, marginBottom: 8 },
   halfActionBtn: {
     flex: 1,
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
