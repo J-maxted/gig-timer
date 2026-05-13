@@ -1,11 +1,5 @@
-// Boat Timer - React Native (Expo) App
-// Updates included:
-// 1) App name updated in UI to "Boat Timer"
-// 2) Boats sorted alphabetically on Add Boat
-// 3) Times shown as mm:ss.s (0.1 s) everywhere (screen / copy / share / save)
-// 4) Position prefix in results display ("1. Boat")
-// 5) Share/Save use tab-separated values (TSV, not CSV)
-// 6) 4-second splash using expo-splash-screen + white background throughout
+// Gig Timer - React Native (Expo) App
+// Fix included: restore handleAddHeat (was crashing the app)
 
 import React, { useState, useRef, useEffect } from 'react';
 import {
@@ -21,7 +15,7 @@ import {
   Platform,
   StatusBar,
   StyleSheet,
-  Share, // fallback text sharing
+  Share, // fallback text-only sharing
 } from 'react-native';
 
 // Modern FileSystem API (SDK 54+)
@@ -29,10 +23,6 @@ import { Directory } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as Clipboard from 'expo-clipboard';
 import { TabView, TabBar } from 'react-native-tab-view';
-
-// Splash control (keep splash for ~4s)
-import * as SplashScreen from 'expo-splash-screen';
-SplashScreen.preventAutoHideAsync().catch(() => { /* noop if already prevented */ });
 
 const GigTimer = () => {
   const initialLayout = { width: Dimensions.get('window').width };
@@ -46,23 +36,15 @@ const GigTimer = () => {
       boats: [],
       newBoatName: '',
       newBoatClub: '',
-      results: [],         // [{ idx, name, club, timeSec }]
+      results: [],
       tappedBoats: [],
       startTime: null,
-      timer: 0,            // live timer (seconds)
+      timer: 0,
       lastTap: null
     },
   });
 
   const timerRefs = useRef({});
-
-  // Splash hide after ~4s
-  useEffect(() => {
-    const t = setTimeout(() => {
-      SplashScreen.hideAsync().catch(() => {});
-    }, 4000);
-    return () => clearTimeout(t);
-  }, []);
 
   // Keep other heats' raceName in sync with Heat 1
   useEffect(() => {
@@ -135,17 +117,15 @@ const GigTimer = () => {
     }));
   };
 
-  const handleTapBoat = (i) => {
+  const handleTapBoat = i => {
     const key = routes[index].key;
     const h = heatData[key];
     if (!h.startTime || h.tappedBoats.includes(i)) return;
 
-    // Capture 0.1 s resolution in seconds (numeric)
-    const elapsedSec = Number(((Date.now() - h.startTime) / 1000).toFixed(1));
+    const t = Number(((Date.now() - h.startTime) / 1000).toFixed(1));
+    const entry = { idx: i, name: h.boats[i].name, club: h.boats[i].club, timeSec: t };
 
-    const entry = { idx: i, name: h.boats[i].name, club: h.boats[i].club, timeSec: elapsedSec };
     const res = [...h.results, entry].sort((a, b) => a.timeSec - b.timeSec);
-
     setHeatData(prev => ({
       ...prev,
       [key]: { ...h, results: res, tappedBoats: [...h.tappedBoats, i], lastTap: i }
@@ -175,7 +155,6 @@ const GigTimer = () => {
     if (!name) return;
     const club = (h.newBoatClub || '').trim();
 
-    // Append then sort alphabetically (case-insensitive)
     const nextBoats = [...h.boats, { name, club }].sort((a, b) =>
       a.name.localeCompare(b.name, 'en', { sensitivity: 'base' })
     );
@@ -186,24 +165,51 @@ const GigTimer = () => {
     }));
   };
 
-  // ---------- Text copy (positions + mm:ss.s) ----------
-  const formatText = (res, routeKey) => {
-    const h = heatData[routeKey];
+  // ----------------------------
+  // ✅ FIX: handleAddHeat (missing -> crash)
+  // Place inside GigTimer, ABOVE the return.
+  // ----------------------------
+  const handleAddHeat = () => {
+    const n = heats.length + 1;
+    const key = `heat${n}`;
+    const newH = { key, title: `Heat ${n}` };
+
+    setHeats(h => [...h, newH]);
+    setRoutes(r => [...r, newH]);
+
+    setHeatData(d => ({
+      ...d,
+      [key]: {
+        raceName: d.heat1?.raceName || '',
+        boats: [],
+        newBoatName: '',
+        newBoatClub: '',
+        results: [],
+        tappedBoats: [],
+        timer: 0,
+        startTime: null,
+        lastTap: null,
+      }
+    }));
+  };
+
+  // ----------------------------
+  // Copy Results
+  // ----------------------------
+  const formatText = (res, k) => {
+    const h = heatData[k];
     const heatTitle = routes[index]?.title ?? '';
     const head = `Race: ${h.raceName}\nHeat: ${heatTitle}`;
-    const body = res
-      .map((e, i) => `${i + 1}. ${e.name}${e.club ? ` (${e.club})` : ''} - ${formatTime(e.timeSec)}`)
-      .join('\n');
+    const body = res.map((e, i) => `${i + 1}. ${e.name}${e.club ? ` (${e.club})` : ''} - ${formatTime(e.timeSec)}`).join('\n');
     return head + '\n' + body;
   };
 
-  const copyRes = (k) => {
-    const text = formatText(heatData[k].results, k);
-    Clipboard.setStringAsync(text);
+  const copyRes = k => {
+    Clipboard.setStringAsync(formatText(heatData[k].results, k));
     Alert.alert('Results copied');
   };
 
-  // ---------- TSV helpers (tab-separated) ----------
+  // TSV export
   const buildTsvForHeat = (k) => {
     const header = 'Race\tHeat\tPos\tName\tClub\tTime';
     const heat = heatData[k];
@@ -212,18 +218,17 @@ const GigTimer = () => {
       `${tsvQuote(heat.raceName)}\t${tsvQuote(heatTitle)}\t${i + 1}\t${tsvQuote(e.name)}\t${tsvQuote(e.club || '')}\t${formatTime(e.timeSec)}`
     );
     const tsv = [header, ...rows].join('\n');
-    const fileName = `${k}-results-${Date.now()}.csv`; // extension .csv for compatibility, content is TSV
+    const fileName = `${k}-results-${Date.now()}.tsv`;
     return { tsv, fileName };
   };
 
   function tsvQuote(val) {
     const s = String(val ?? '');
-    // For TSV, only quote if tabs/quotes/newlines appear
     if (/[\t"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
     return s;
   }
 
-  // ---------- Share (file-based if available; fallback to text-only) ----------
+  // Share (file-based if possible; fallback to text)
   const shareRes = async (k) => {
     try {
       console.log('Sharing module type:', typeof Sharing);
@@ -238,13 +243,13 @@ const GigTimer = () => {
         typeof Sharing.shareAsync === 'function';
 
       if (!hasModule) {
-        await Share.share({ title: 'Boat Timer results', message: tsv });
+        await Share.share({ title: 'Results', message: tsv });
         return;
       }
 
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
-        await Share.share({ title: 'Boat Timer results', message: tsv });
+        await Share.share({ title: 'Results', message: tsv });
         return;
       }
 
@@ -252,8 +257,7 @@ const GigTimer = () => {
       const file = await cacheDir.createFile(fileName, 'text/tab-separated-values');
       await file.write(tsv);
 
-      const uri = String(file.uri);
-      await Sharing.shareAsync(uri, {
+      await Sharing.shareAsync(String(file.uri), {
         mimeType: 'text/tab-separated-values',
         dialogTitle: 'Share results',
         UTI: 'public.tab-separated-values-text',
@@ -262,14 +266,14 @@ const GigTimer = () => {
       console.warn('shareRes error:', err);
       try {
         const { tsv } = buildTsvForHeat(k);
-        await Share.share({ title: 'Boat Timer results', message: tsv });
-      } catch (e) {
+        await Share.share({ title: 'Results', message: tsv });
+      } catch {
         Alert.alert('Share failed', String(err?.message ?? err));
       }
     }
   };
 
-  // ---------- Save (pick folder → write TSV) ----------
+  // Save (pick folder -> write TSV)
   const saveRes = async (k) => {
     try {
       const { tsv, fileName } = buildTsvForHeat(k);
@@ -287,7 +291,6 @@ const GigTimer = () => {
     }
   };
 
-  // ---------- Per-heat screen ----------
   const renderScene = ({ route }) => {
     const d = heatData[route.key];
 
@@ -303,8 +306,6 @@ const GigTimer = () => {
             contentContainerStyle={styles.container}
             keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.appTitle}>Boat Timer</Text>
-
             <TextInput
               style={styles.input}
               placeholder="Race Name"
@@ -360,7 +361,7 @@ const GigTimer = () => {
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.noteText}>Tap boat buttons below as boats cross the finish</Text>
+            <Text style={styles.noteText}>Tap boat buttons below as boats cross finish line</Text>
 
             <View style={styles.boatContainer}>
               {d.boats.map((b, i) => (
@@ -378,7 +379,6 @@ const GigTimer = () => {
 
             <Text style={styles.sub}>Results</Text>
 
-            {/* Copy | Share | Save (TSV) */}
             <View style={styles.exportRow}>
               <TouchableOpacity style={styles.thirdButton} onPress={() => copyRes(route.key)}>
                 <Text style={styles.btnText}>Copy</Text>
@@ -434,56 +434,27 @@ const GigTimer = () => {
   );
 };
 
-// ---------- helpers ----------
+// Time formatting: mm:ss.s (0.1s)
 function formatTime(sec) {
-  // inputs: seconds (number)
   const total = Number(sec) || 0;
   const m = Math.floor(total / 60);
-  const s = (total - m * 60);
+  const s = total - m * 60;
   const sFixed = (Math.round(s * 10) / 10).toFixed(1);
   const mm = String(m).padStart(2, '0');
-  const ss = Number(sFixed) < 10 ? `0${sFixed}` : sFixed; // ensures 02:03.4
+  const ss = Number(sFixed) < 10 ? `0${sFixed}` : sFixed;
   return `${mm}:${ss}`;
 }
 
 const styles = StyleSheet.create({
-  appSafeArea: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  safeArea: {
-    flex: 1,
-    borderBottomWidth: 8,
-    borderColor: '#ccc',
-    backgroundColor: '#FFFFFF',
-  },
-  scroll: {
-    backgroundColor: '#FFFFFF',
-  },
-  container: {
-    padding: 16,
-    backgroundColor: '#FFFFFF',
-    paddingBottom: 56, // ~8mm above nav bar
-  },
-
-  appTitle: {
-    color: '#111',
-    fontSize: 22,
-    fontWeight: '700',
-    marginBottom: 12,
-    alignSelf: 'center',
-  },
+  appSafeArea: { flex: 1, backgroundColor: '#FFFFFF' },
+  safeArea: { flex: 1, borderBottomWidth: 8, borderColor: '#ccc', backgroundColor: '#FFFFFF' },
+  scroll: { backgroundColor: '#FFFFFF' },
+  container: { padding: 16, backgroundColor: '#FFFFFF', paddingBottom: 56 },
 
   input: {
-    borderWidth: 1,
-    borderColor: '#ccc',
-    padding: 10,
-    marginBottom: 10,
-    borderRadius: 5,
-    backgroundColor: '#FFFFFF',
-    color: '#111',
+    borderWidth: 1, borderColor: '#ccc', padding: 10, marginBottom: 10, borderRadius: 5,
+    backgroundColor: '#FFFFFF', color: '#111'
   },
-
   sub: { fontSize: 18, fontWeight: 'bold', marginVertical: 10 },
   rowBoat: { flexDirection: 'row', marginBottom: 10 },
   button: { backgroundColor: '#4CAF50', padding: 10, borderRadius: 5, alignItems: 'center', marginVertical: 5 },
